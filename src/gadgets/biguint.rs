@@ -183,7 +183,7 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderBiguint<F, D>
     fn mul_biguint(&mut self, a: &BigUintTarget, b: &BigUintTarget) -> BigUintTarget {
         let total_limbs = a.limbs.len() + b.limbs.len();
 
-        // limbs of a and b are routed wires 
+        // limbs of a and b are routed wires
 
         let mut to_add = vec![vec![]; total_limbs];
         for i in 0..a.limbs.len() {
@@ -360,18 +360,18 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F>
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
+    use env_logger::{try_init_from_env, Env, DEFAULT_FILTER_ENV};
+    use log::Level;
     use num::{BigUint, FromPrimitive, Integer};
-    use plonky2::field::types::{Sample, PrimeField};
+    use plonky2::field::types::{PrimeField, Sample};
     use plonky2::iop::witness::PartialWitness;
     use plonky2::plonk::circuit_builder::CircuitBuilder;
     use plonky2::plonk::circuit_data::CircuitConfig;
     use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
-    use rand::rngs::OsRng;
-    use rand::Rng;
-    use env_logger::{try_init_from_env, Env, DEFAULT_FILTER_ENV};
-    use log::Level;
     use plonky2::plonk::prover::prove;
     use plonky2::util::timing::TimingTree;
+    use rand::rngs::OsRng;
+    use rand::Rng;
 
     fn init_logger() {
         let _ = try_init_from_env(Env::default().filter_or(DEFAULT_FILTER_ENV, "debug"));
@@ -387,8 +387,10 @@ mod tests {
         type F = <C as GenericConfig<D>>::F;
         let mut rng = OsRng;
 
-        let x_value = plonky2::field::secp256k1_scalar::Secp256K1Scalar::rand().to_canonical_biguint();
-        let y_value = plonky2::field::secp256k1_scalar::Secp256K1Scalar::rand().to_canonical_biguint();
+        let x_value =
+            plonky2::field::secp256k1_scalar::Secp256K1Scalar::rand().to_canonical_biguint();
+        let y_value =
+            plonky2::field::secp256k1_scalar::Secp256K1Scalar::rand().to_canonical_biguint();
         let expected_z_value = &x_value + &y_value;
 
         let config = CircuitConfig::standard_recursion_config();
@@ -463,9 +465,10 @@ mod tests {
         let mut builder = CircuitBuilder::<F, D>::new(config);
         let mut pw = PartialWitness::new();
 
-
-        let x_value = plonky2::field::secp256k1_scalar::Secp256K1Scalar::rand().to_canonical_biguint();
-        let y_value = plonky2::field::secp256k1_scalar::Secp256K1Scalar::rand().to_canonical_biguint();
+        let x_value =
+            plonky2::field::secp256k1_scalar::Secp256K1Scalar::rand().to_canonical_biguint();
+        let y_value =
+            plonky2::field::secp256k1_scalar::Secp256K1Scalar::rand().to_canonical_biguint();
         let expected_z_value = &x_value * &y_value;
 
         let x = builder.add_virtual_biguint_target(x_value.to_u32_digits().len());
@@ -510,18 +513,18 @@ mod tests {
             let x_value = BigUint::from_u128(rng.gen()).unwrap();
             let y_value = BigUint::from_u128(rng.gen()).unwrap();
             let expected_z_value = &x_value * &y_value;
-    
+
             let x = builder.add_virtual_biguint_target(x_value.to_u32_digits().len());
             let y = builder.add_virtual_biguint_target(y_value.to_u32_digits().len());
             let z = builder.mul_biguint(&x, &y);
-            let expected_z = builder.add_virtual_biguint_target(expected_z_value.to_u32_digits().len());
+            let expected_z =
+                builder.add_virtual_biguint_target(expected_z_value.to_u32_digits().len());
             builder.connect_biguint(&z, &expected_z);
-    
+
             pw.set_biguint_target(&x, &x_value);
             pw.set_biguint_target(&y, &y_value);
             pw.set_biguint_target(&expected_z, &expected_z_value);
         }
-
 
         let num_gates = builder.num_gates();
         let mut timing = TimingTree::new("prove", Level::Debug);

@@ -12,7 +12,9 @@ use plonky2::gates::packed_util::PackedEvaluableBase;
 use plonky2::gates::util::StridedConstraintConsumer;
 use plonky2::hash::hash_types::RichField;
 use plonky2::iop::ext_target::ExtensionTarget;
-use plonky2::iop::generator::{GeneratedValues, SimpleGenerator, WitnessGenerator, WitnessGeneratorRef};
+use plonky2::iop::generator::{
+    GeneratedValues, SimpleGenerator, WitnessGenerator, WitnessGeneratorRef,
+};
 use plonky2::iop::target::Target;
 use plonky2::iop::wire::Wire;
 use plonky2::iop::witness::{PartitionWitness, Witness, WitnessWrite};
@@ -67,7 +69,10 @@ impl<F: RichField + Extendable<D>, const D: usize> MulBigUintGate<F, D> {
 
     // Wire indices for ith combined limb and carry
     pub fn wire_combined_limbs_with_carry(&self, i: usize) -> (usize, usize) {
-        let first_empty_wire = self.wire_to_add_product_carry(self.a_num_limbs, self.b_num_limbs).1 + 1;
+        let first_empty_wire = self
+            .wire_to_add_product_carry(self.a_num_limbs, self.b_num_limbs)
+            .1
+            + 1;
         let combined_limb_wire = first_empty_wire + i * 2;
         let combined_carry_wire = combined_limb_wire + 1;
         (combined_limb_wire, combined_carry_wire)
@@ -90,7 +95,6 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for MulBigUintGate
 
         let mut constraints = Vec::with_capacity(self.num_constraints());
 
-
         // Constraints for the product and carry of each limb of a and b.
         for i in 0..self.a_num_limbs {
             for j in 0..self.b_num_limbs {
@@ -101,11 +105,31 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for MulBigUintGate
                 constraints.push(product + carry - a_limbs[i] * b_limbs[j]);
             }
         }
-        
-        for i in 0..self.total_limbs() {
-            // TODO: Fill in constraints for combined limbs
+
+        for c in 0..self.total_limbs() - 1 {
+            let (combined_limb_wire, combined_carry_wire) = self.wire_combined_limbs_with_carry(c);
+            let combined_limb = vars.local_wires[combined_limb_wire];
+            let combined_carry = vars.local_wires[combined_carry_wire];
+            let (_, next_combined_carry_wire) = self.wire_combined_limbs_with_carry(c + 1);
+            let next_combined_carry = vars.local_wires[next_combined_carry_wire];
+            let mut to_add_c = F::Extension::ZERO;
+            for i in 0..self.a_num_limbs {
+                for j in 0..self.b_num_limbs {
+                    let (product_wire, carry_wire) = self.wire_to_add_product_carry(i, j);
+                    let product = vars.local_wires[product_wire];
+                    let carry = vars.local_wires[carry_wire];
+                    if i + j == c {
+                        to_add_c += product;
+                    }
+                    if i + j + 1 == c {
+                        to_add_c += carry;
+                    }
+                }
+            }
+            constraints.push(combined_limb + next_combined_carry - to_add_c - combined_carry);
         }
 
+        // TODO: Boundary constraint: the last combined carry is last combined_limb + 1
         constraints
     }
 
@@ -153,4 +177,3 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for MulBigUintGate
         self.a_num_limbs * self.b_num_limbs + self.total_limbs()
     }
 }
-
