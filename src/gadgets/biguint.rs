@@ -183,6 +183,8 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderBiguint<F, D>
     fn mul_biguint(&mut self, a: &BigUintTarget, b: &BigUintTarget) -> BigUintTarget {
         let total_limbs = a.limbs.len() + b.limbs.len();
 
+        // limbs of a and b are routed wires 
+
         let mut to_add = vec![vec![]; total_limbs];
         for i in 0..a.limbs.len() {
             for j in 0..b.limbs.len() {
@@ -191,6 +193,11 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderBiguint<F, D>
                 to_add[i + j + 1].push(carry);
             }
         }
+
+        // for each i and j there is a product and a carry, so there are 2 advice wires
+        // a_num_limbs * b_num_limbs * 2 = 9 * 9 * 2 = 162. wide is 234.
+        // advice wire: wire for which there are no copy constraints across rows
+        // a_limb_i * b_limb_j = product_{i+j} + carry_{i+j+1}
 
         let mut combined_limbs = vec![];
         let mut carry = self.zero_u32();
@@ -201,8 +208,14 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderBiguint<F, D>
         }
         combined_limbs.push(carry);
 
+        // to_add = [[...], [...],...]
+        // combined_limbs = [....]
+        // carry = [....] = [0,left_over_carry...]
+        // carry_i + \sum of to_add_i = combined_limbs_i + carry_{i+1}
+        // carry_last = combined_limb_last
+
         BigUintTarget {
-            limbs: combined_limbs,
+            limbs: combined_limbs, // routed wires each limb (total_limbs number of wires)
         }
     }
 
@@ -348,24 +361,34 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F>
 mod tests {
     use anyhow::Result;
     use num::{BigUint, FromPrimitive, Integer};
+    use plonky2::field::types::{Sample, PrimeField};
     use plonky2::iop::witness::PartialWitness;
     use plonky2::plonk::circuit_builder::CircuitBuilder;
     use plonky2::plonk::circuit_data::CircuitConfig;
     use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
     use rand::rngs::OsRng;
     use rand::Rng;
+    use env_logger::{try_init_from_env, Env, DEFAULT_FILTER_ENV};
+    use log::Level;
+    use plonky2::plonk::prover::prove;
+    use plonky2::util::timing::TimingTree;
+
+    fn init_logger() {
+        let _ = try_init_from_env(Env::default().filter_or(DEFAULT_FILTER_ENV, "debug"));
+    }
 
     use crate::gadgets::biguint::{CircuitBuilderBiguint, WitnessBigUint};
 
     #[test]
     fn test_biguint_add() -> Result<()> {
+        init_logger();
         const D: usize = 2;
         type C = PoseidonGoldilocksConfig;
         type F = <C as GenericConfig<D>>::F;
         let mut rng = OsRng;
 
-        let x_value = BigUint::from_u128(rng.gen()).unwrap();
-        let y_value = BigUint::from_u128(rng.gen()).unwrap();
+        let x_value = plonky2::field::secp256k1_scalar::Secp256K1Scalar::rand().to_canonical_biguint();
+        let y_value = plonky2::field::secp256k1_scalar::Secp256K1Scalar::rand().to_canonical_biguint();
         let expected_z_value = &x_value + &y_value;
 
         let config = CircuitConfig::standard_recursion_config();
@@ -382,9 +405,20 @@ mod tests {
         pw.set_biguint_target(&y, &y_value);
         pw.set_biguint_target(&expected_z, &expected_z_value);
 
+        let num_gates = builder.num_gates();
+        let mut timing = TimingTree::new("prove", Level::Debug);
         let data = builder.build::<C>();
-        let proof = data.prove(pw).unwrap();
-        data.verify(proof)
+        let proof = prove::<F, C, D>(&data.prover_only, &data.common, pw, &mut timing)?;
+        timing.print();
+        println!(
+            "BIGUINT ADD: num_gates: {}, degree: {}, ",
+            num_gates,
+            data.common.degree()
+        );
+
+        data.verify(proof)?;
+
+        Ok(())
     }
 
     #[test]
@@ -419,18 +453,20 @@ mod tests {
 
     #[test]
     fn test_biguint_mul() -> Result<()> {
+        init_logger();
         const D: usize = 2;
         type C = PoseidonGoldilocksConfig;
         type F = <C as GenericConfig<D>>::F;
         let mut rng = OsRng;
 
-        let x_value = BigUint::from_u128(rng.gen()).unwrap();
-        let y_value = BigUint::from_u128(rng.gen()).unwrap();
-        let expected_z_value = &x_value * &y_value;
-
         let config = CircuitConfig::standard_recursion_config();
-        let mut pw = PartialWitness::new();
         let mut builder = CircuitBuilder::<F, D>::new(config);
+        let mut pw = PartialWitness::new();
+
+
+        let x_value = plonky2::field::secp256k1_scalar::Secp256K1Scalar::rand().to_canonical_biguint();
+        let y_value = plonky2::field::secp256k1_scalar::Secp256K1Scalar::rand().to_canonical_biguint();
+        let expected_z_value = &x_value * &y_value;
 
         let x = builder.add_virtual_biguint_target(x_value.to_u32_digits().len());
         let y = builder.add_virtual_biguint_target(y_value.to_u32_digits().len());
@@ -442,9 +478,65 @@ mod tests {
         pw.set_biguint_target(&y, &y_value);
         pw.set_biguint_target(&expected_z, &expected_z_value);
 
+        let num_gates = builder.num_gates();
+        let mut timing = TimingTree::new("prove", Level::Debug);
         let data = builder.build::<C>();
-        let proof = data.prove(pw).unwrap();
-        data.verify(proof)
+        let proof = prove::<F, C, D>(&data.prover_only, &data.common, pw, &mut timing)?;
+        timing.print();
+        println!(
+            "BIGUINT MUL: num_gates: {}, degree: {}, ",
+            num_gates,
+            data.common.degree()
+        );
+
+        data.verify(proof)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_100_biguint_mul() -> Result<()> {
+        init_logger();
+        const D: usize = 2;
+        type C = PoseidonGoldilocksConfig;
+        type F = <C as GenericConfig<D>>::F;
+        let mut rng = OsRng;
+
+        let config = CircuitConfig::standard_recursion_config();
+        let mut builder = CircuitBuilder::<F, D>::new(config);
+        let mut pw = PartialWitness::new();
+
+        for _ in 0..140 {
+            let x_value = BigUint::from_u128(rng.gen()).unwrap();
+            let y_value = BigUint::from_u128(rng.gen()).unwrap();
+            let expected_z_value = &x_value * &y_value;
+    
+            let x = builder.add_virtual_biguint_target(x_value.to_u32_digits().len());
+            let y = builder.add_virtual_biguint_target(y_value.to_u32_digits().len());
+            let z = builder.mul_biguint(&x, &y);
+            let expected_z = builder.add_virtual_biguint_target(expected_z_value.to_u32_digits().len());
+            builder.connect_biguint(&z, &expected_z);
+    
+            pw.set_biguint_target(&x, &x_value);
+            pw.set_biguint_target(&y, &y_value);
+            pw.set_biguint_target(&expected_z, &expected_z_value);
+        }
+
+
+        let num_gates = builder.num_gates();
+        let mut timing = TimingTree::new("prove", Level::Debug);
+        let data = builder.build::<C>();
+        let proof = prove::<F, C, D>(&data.prover_only, &data.common, pw, &mut timing)?;
+        timing.print();
+        println!(
+            "BIGUINT MUL: num_gates: {}, degree: {}, ",
+            num_gates,
+            data.common.degree()
+        );
+
+        data.verify(proof)?;
+
+        Ok(())
     }
 
     #[test]
@@ -475,6 +567,7 @@ mod tests {
 
     #[test]
     fn test_biguint_div_rem() -> Result<()> {
+        init_logger();
         const D: usize = 2;
         type C = PoseidonGoldilocksConfig;
         type F = <C as GenericConfig<D>>::F;
@@ -501,8 +594,19 @@ mod tests {
         builder.connect_biguint(&div, &expected_div);
         builder.connect_biguint(&rem, &expected_rem);
 
+        let num_gates = builder.num_gates();
+        let mut timing = TimingTree::new("prove", Level::Debug);
         let data = builder.build::<C>();
-        let proof = data.prove(pw).unwrap();
-        data.verify(proof)
+        let proof = prove::<F, C, D>(&data.prover_only, &data.common, pw, &mut timing)?;
+        timing.print();
+        println!(
+            "BIGUINT MUL: num_gates: {}, degree: {}, ",
+            num_gates,
+            data.common.degree()
+        );
+
+        data.verify(proof)?;
+
+        Ok(())
     }
 }
