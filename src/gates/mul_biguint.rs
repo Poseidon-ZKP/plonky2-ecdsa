@@ -2,6 +2,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 use alloc::{format, vec};
 use core::marker::PhantomData;
+use num::{BigUint, Zero};
 
 use plonky2::field::extension::Extendable;
 use plonky2::field::ops::Square;
@@ -241,7 +242,35 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F>
         }
 
         for c in 0..self.gate.total_limbs() {
-            //TODO: Sum to_add's to get combined limbs.
+            let (combined_limb_wire, combined_carry_wire) =
+                self.gate.wire_combined_limbs_with_carry(c);
+            if c == 0 {
+                // Set carry to 0
+                out_buffer.set_wire(local_wire(combined_carry_wire), F::ZERO);
+            }
+            let mut to_add_c = BigUint::zero();
+            for i in 0..self.gate.a_num_limbs {
+                for j in 0..self.gate.b_num_limbs {
+                    let (product_wire, carry_wire) = self.gate.wire_to_add_product_carry(i, j);
+                    if i + j == c {
+                        to_add_c += get_local_wire(product_wire).to_canonical_biguint();
+                    }
+                    if i + j + 1 == c {
+                        to_add_c += get_local_wire(carry_wire).to_canonical_biguint();
+                    }
+                }
+            }
+            to_add_c += get_local_wire(combined_carry_wire).to_canonical_biguint();
+            let to_add_c_u32_digits = to_add_c.to_u32_digits();
+            let (combined_limb, next_combined_carry) = (
+                F::from_canonical_u32(to_add_c_u32_digits[0]),
+                F::from_canonical_u32(to_add_c_u32_digits[1]),
+            );
+            out_buffer.set_wire(local_wire(combined_limb_wire), combined_limb);
+            if c < self.gate.total_limbs() - 1 {
+                let (_, next_combined_carry_wire) = self.gate.wire_combined_limbs_with_carry(c + 1);
+                out_buffer.set_wire(local_wire(next_combined_carry_wire), next_combined_carry);
+            }
         }
     }
 }
