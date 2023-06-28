@@ -93,6 +93,8 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for MulBigUintGate
             .map(|i| vars.local_wires[self.wire_b(i)])
             .collect();
 
+        // TODO: Do limbs have to be range checked < 2^32?
+
         let mut constraints = Vec::with_capacity(self.num_constraints());
 
         // Constraints for the product and carry of each limb of a and b.
@@ -106,12 +108,16 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for MulBigUintGate
             }
         }
 
-        for c in 0..self.total_limbs() - 1 {
+        for c in 0..self.total_limbs() {
             let (combined_limb_wire, combined_carry_wire) = self.wire_combined_limbs_with_carry(c);
             let combined_limb = vars.local_wires[combined_limb_wire];
             let combined_carry = vars.local_wires[combined_carry_wire];
-            let (_, next_combined_carry_wire) = self.wire_combined_limbs_with_carry(c + 1);
-            let next_combined_carry = vars.local_wires[next_combined_carry_wire];
+
+            let next_combined_carry = F::Extension::ZERO;
+            if c < self.total_limbs() - 1 {
+                let (_, next_combined_carry_wire) = self.wire_combined_limbs_with_carry(c + 1);
+                let next_combined_carry = vars.local_wires[next_combined_carry_wire];
+            }
             let mut to_add_c = F::Extension::ZERO;
             for i in 0..self.a_num_limbs {
                 for j in 0..self.b_num_limbs {
@@ -129,7 +135,6 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for MulBigUintGate
             constraints.push(combined_limb + next_combined_carry - to_add_c - combined_carry);
         }
 
-        // TODO: Boundary constraint: the last combined carry is last combined_limb + 1
         constraints
     }
 
@@ -175,5 +180,61 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for MulBigUintGate
 
     fn num_constraints(&self) -> usize {
         self.a_num_limbs * self.b_num_limbs + self.total_limbs()
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct MulBigUintGenerator<F: RichField + Extendable<D>, const D: usize> {
+    row: usize,
+    gate: MulBigUintGate<F, D>,
+}
+
+impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F>
+    for MulBigUintGenerator<F, D>
+{
+    fn dependencies(&self) -> Vec<Target> {
+        let local_target = |column| Target::wire(self.row, column);
+
+        let mut deps = Vec::with_capacity(self.gate.a_num_limbs + self.gate.b_num_limbs);
+        for i in 0..self.gate.a_num_limbs {
+            deps.push(local_target(self.gate.wire_a(i)));
+        }
+        for i in 0..self.gate.b_num_limbs {
+            deps.push(local_target(self.gate.wire_b(i)));
+        }
+        deps
+    }
+
+    fn run_once(&self, witness: &PartitionWitness<F>, out_buffer: &mut GeneratedValues<F>) {
+        let local_wire = |column| Wire {
+            row: self.row,
+            column,
+        };
+
+        let get_local_wire = |column| witness.get_wire(local_wire(column));
+
+        // Load in a and b
+        // This is a bit inefficient, we could load in the limbs in parallel.
+        let a_limbs: Vec<_> = (0..self.gate.a_num_limbs)
+            .map(|i| get_local_wire(self.gate.wire_a(i)))
+            .collect();
+
+        let b_limbs: Vec<_> = (0..self.gate.b_num_limbs)
+            .map(|i| get_local_wire(self.gate.wire_b(i)))
+            .collect();
+
+        for i in 0..self.gate.a_num_limbs {
+            for j in 0..self.gate.b_num_limbs {
+                let (product_wire, carry_wire) = self.gate.wire_to_add_product_carry(i, j);
+                // TODO: Multiply limbs and get product and carry
+                out_buffer.set_wire(local_wire(product_wire), product);
+                out_buffer.set_wire(local_wire(carry_wire), carry);
+            }
+        }
+
+        for c in 0..self.gate.total_limbs() {
+            let (combined_limb_wire, combined_carry_wire) =
+                self.gate.wire_combined_limbs_with_carry(c);
+        }
     }
 }
