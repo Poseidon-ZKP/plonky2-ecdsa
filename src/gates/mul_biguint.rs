@@ -225,16 +225,23 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F>
 
         for i in 0..self.gate.a_num_limbs {
             for j in 0..self.gate.b_num_limbs {
+                // TODO: Multiply limbs and get product and carry.
+                let a_i = a_limbs[i].to_canonical_biguint();
+                let b_j = b_limbs[j].to_canonical_biguint();
+                let product_carry = (a_i * b_j).to_u32_digits();
+                let (product, carry) = (
+                    F::from_canonical_u32(product_carry[0]),
+                    F::from_canonical_u32(product_carry[1]),
+                );
+
                 let (product_wire, carry_wire) = self.gate.wire_to_add_product_carry(i, j);
-                // TODO: Multiply limbs and get product and carry
                 out_buffer.set_wire(local_wire(product_wire), product);
                 out_buffer.set_wire(local_wire(carry_wire), carry);
             }
         }
 
         for c in 0..self.gate.total_limbs() {
-            let (combined_limb_wire, combined_carry_wire) =
-                self.gate.wire_combined_limbs_with_carry(c);
+            //TODO: Sum to_add's to get combined limbs.
         }
     }
 }
