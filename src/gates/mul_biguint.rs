@@ -4,6 +4,7 @@ use alloc::{format, vec};
 use core::marker::PhantomData;
 use num::{BigUint, Zero};
 
+use alloc::boxed::Box;
 use plonky2::field::extension::Extendable;
 use plonky2::field::ops::Square;
 use plonky2::field::packed::PackedField;
@@ -13,9 +14,7 @@ use plonky2::gates::packed_util::PackedEvaluableBase;
 use plonky2::gates::util::StridedConstraintConsumer;
 use plonky2::hash::hash_types::RichField;
 use plonky2::iop::ext_target::ExtensionTarget;
-use plonky2::iop::generator::{
-    GeneratedValues, SimpleGenerator, WitnessGenerator, WitnessGeneratorRef,
-};
+use plonky2::iop::generator::{GeneratedValues, SimpleGenerator, WitnessGenerator};
 use plonky2::iop::target::Target;
 use plonky2::iop::wire::Wire;
 use plonky2::iop::witness::{PartitionWitness, Witness, WitnessWrite};
@@ -159,12 +158,12 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for MulBigUintGate
         todo!("Will implement if we need recursion")
     }
 
-    fn generators(&self, row: usize, _local_constants: &[F]) -> Vec<WitnessGeneratorRef<F>> {
+    fn generators(&self, row: usize, _local_constants: &[F]) -> Vec<Box<dyn WitnessGenerator<F>>> {
         let gen = MulBigUintGenerator::<F, D> {
             row,
             gate: self.clone(),
         };
-        vec![WitnessGeneratorRef::new(gen.adapter())]
+        vec![Box::new(gen.adapter())]
     }
 
     fn num_wires(&self) -> usize {
