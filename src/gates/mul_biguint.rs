@@ -27,6 +27,8 @@ use plonky2::plonk::vars::{
 };
 use plonky2::util::serialization::{Buffer, IoResult, Read, Write};
 
+use crate::gadgets::biguint::BigUintTarget;
+
 /// A gate for multiplying a * b, where a and b are big unsigned integers.
 #[derive(Clone, Debug, Default)]
 pub struct MulBigUintGate<F: RichField + Extendable<D>, const D: usize> {
@@ -208,7 +210,7 @@ impl<F: RichField + Extendable<D>, const D: usize> PackedEvaluableBase<F, D>
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct MulBigUintGenerator<F: RichField + Extendable<D>, const D: usize> {
     row: usize,
     gate: MulBigUintGate<F, D>,
@@ -290,10 +292,15 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F>
             }
             to_add_c += get_local_wire(combined_carry_wire).to_canonical_biguint();
             let to_add_c_u32_digits = to_add_c.to_u32_digits();
-            let (combined_limb, next_combined_carry) = (
-                F::from_canonical_u32(to_add_c_u32_digits[0]),
-                F::from_canonical_u32(to_add_c_u32_digits[1]),
-            );
+            let (combined_limb, next_combined_carry) = if to_add_c_u32_digits.len() == 1 {
+                (F::from_canonical_u32(to_add_c_u32_digits[0]), F::ZERO)
+            } else {
+                (
+                    F::from_canonical_u32(to_add_c_u32_digits[0]),
+                    F::from_canonical_u32(to_add_c_u32_digits[1]),
+                )
+            };
+
             out_buffer.set_wire(local_wire(combined_limb_wire), combined_limb);
             if c < self.gate.total_limbs() - 1 {
                 let (_, next_combined_carry_wire) = self.gate.wire_combined_limbs_with_carry(c + 1);

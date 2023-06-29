@@ -1,6 +1,7 @@
 use alloc::vec;
 use alloc::vec::Vec;
 use core::marker::PhantomData;
+use libc_print::libc_println;
 
 use num::{BigUint, Integer, Zero};
 use plonky2::field::extension::Extendable;
@@ -13,6 +14,8 @@ use plonky2::plonk::circuit_builder::CircuitBuilder;
 use plonky2_u32::gadgets::arithmetic_u32::{CircuitBuilderU32, U32Target};
 use plonky2_u32::gadgets::multiple_comparison::list_le_u32_circuit;
 use plonky2_u32::witness::{GeneratedValuesU32, WitnessU32};
+
+use crate::gates::mul_biguint::MulBigUintGate;
 
 #[derive(Clone, Debug)]
 pub struct BigUintTarget {
@@ -53,6 +56,8 @@ pub trait CircuitBuilderBiguint<F: RichField + Extendable<D>, const D: usize> {
     fn sub_biguint(&mut self, a: &BigUintTarget, b: &BigUintTarget) -> BigUintTarget;
 
     fn mul_biguint(&mut self, a: &BigUintTarget, b: &BigUintTarget) -> BigUintTarget;
+
+    fn mul_biguint_custom(&mut self, a: &BigUintTarget, b: &BigUintTarget);
 
     fn mul_biguint_by_bool(&mut self, a: &BigUintTarget, b: BoolTarget) -> BigUintTarget;
 
@@ -217,6 +222,25 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderBiguint<F, D>
         BigUintTarget {
             limbs: combined_limbs, // routed wires each limb (total_limbs number of wires)
         }
+    }
+
+    fn mul_biguint_custom(&mut self, a: &BigUintTarget, b: &BigUintTarget) {
+        let gate = MulBigUintGate::<F, D>::new(8, 8);
+        let row = self.add_gate(gate.clone(), vec![]);
+
+        libc_println!("row: {}", row);
+
+        for i in 0..a.limbs.len() {
+            self.connect(a.limbs[i].0, Target::wire(row, gate.wire_a(i)));
+        }
+
+        libc_println!("a.limbs.len(): {}", a.limbs.len());
+
+        for i in 0..b.limbs.len() {
+            self.connect(b.limbs[i].0, Target::wire(row, gate.wire_b(i)));
+        }
+
+        libc_println!("b.limbs.len(): {}", b.limbs.len());
     }
 
     fn mul_biguint_by_bool(&mut self, a: &BigUintTarget, b: BoolTarget) -> BigUintTarget {
@@ -488,6 +512,41 @@ mod tests {
         timing.print();
         println!(
             "BIGUINT MUL: num_gates: {}, degree: {}, ",
+            num_gates,
+            data.common.degree()
+        );
+
+        data.verify(proof)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_biguint_mul_custom() -> Result<()> {
+        init_logger();
+        const D: usize = 2;
+        type C = PoseidonGoldilocksConfig;
+        type F = <C as GenericConfig<D>>::F;
+        let config = CircuitConfig::wide_ecc_config();
+        let mut builder = CircuitBuilder::<F, D>::new(config);
+        let mut pw = PartialWitness::new();
+
+        let x_value =
+            plonky2::field::secp256k1_scalar::Secp256K1Scalar::rand().to_canonical_biguint();
+        let y_value =
+            plonky2::field::secp256k1_scalar::Secp256K1Scalar::rand().to_canonical_biguint();
+
+        let x = builder.constant_biguint(&x_value);
+        let y = builder.constant_biguint(&y_value);
+        builder.mul_biguint_custom(&x, &y);
+
+        let num_gates = builder.num_gates();
+        let mut timing = TimingTree::new("prove", Level::Debug);
+        let data = builder.build::<C>();
+        let proof = prove::<F, C, D>(&data.prover_only, &data.common, pw, &mut timing)?;
+        timing.print();
+        println!(
+            "BIGUINT MUL CUSTOM: num_gates: {}, degree: {}, ",
             num_gates,
             data.common.degree()
         );
