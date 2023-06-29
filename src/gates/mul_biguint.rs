@@ -166,67 +166,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for MulBigUintGate
         builder: &mut CircuitBuilder<F, D>,
         vars: EvaluationTargets<D>,
     ) -> Vec<ExtensionTarget<D>> {
-        let a_limbs: Vec<_> = (0..self.a_num_limbs)
-            .map(|i| vars.local_wires[self.wire_a(i)])
-            .collect();
-
-        let b_limbs: Vec<_> = (0..self.b_num_limbs)
-            .map(|i| vars.local_wires[self.wire_b(i)])
-            .collect();
-
-        // TODO: Do limbs have to be range checked < 2^32?
-
-        let mut constraints = Vec::with_capacity(self.num_constraints());
-
-        // Constraints for the product and carry of each limb of a and b.
-        for i in 0..self.a_num_limbs {
-            for j in 0..self.b_num_limbs {
-                let (product_wire, carry_wire) = self.wire_to_add_product_carry(i, j);
-                let product = vars.local_wires[product_wire];
-                let carry = vars.local_wires[carry_wire];
-
-                let sum_product_carry = builder.add_extension(product, carry);
-
-                constraints.push(builder.mul_sub_extension(
-                    a_limbs[i],
-                    b_limbs[j],
-                    sum_product_carry,
-                ));
-            }
-        }
-
-        for c in 0..self.total_limbs() {
-            let (combined_limb_wire, combined_carry_wire) = self.wire_combined_limbs_with_carry(c);
-            let combined_limb = vars.local_wires[combined_limb_wire];
-            let combined_carry = vars.local_wires[combined_carry_wire];
-
-            let mut next_combined_carry = builder.zero_extension();
-            if c < self.total_limbs() - 1 {
-                let (_, next_combined_carry_wire) = self.wire_combined_limbs_with_carry(c + 1);
-                next_combined_carry = vars.local_wires[next_combined_carry_wire];
-            }
-            let mut to_add_c = builder.zero_extension();
-            for i in 0..self.a_num_limbs {
-                for j in 0..self.b_num_limbs {
-                    let (product_wire, carry_wire) = self.wire_to_add_product_carry(i, j);
-                    let product = vars.local_wires[product_wire];
-                    let carry = vars.local_wires[carry_wire];
-                    if i + j == c {
-                        to_add_c = builder.add_extension(to_add_c, product);
-                    }
-                    if i + j + 1 == c {
-                        to_add_c = builder.add_extension(to_add_c, carry);
-                    }
-                }
-            }
-
-            let lhs = builder.add_extension(combined_limb, next_combined_carry);
-
-            let rhs = builder.add_extension(to_add_c, combined_carry);
-            constraints.push(builder.sub_extension(lhs, rhs));
-        }
-
-        constraints
+        todo!("eval_unfiltered_circuit")
     }
 
     fn generators(&self, row: usize, _local_constants: &[F]) -> Vec<Box<dyn WitnessGenerator<F>>> {
@@ -264,53 +204,7 @@ impl<F: RichField + Extendable<D>, const D: usize> PackedEvaluableBase<F, D>
         vars: EvaluationVarsBasePacked<P>,
         mut yield_constr: StridedConstraintConsumer<P>,
     ) {
-        let a_limbs: Vec<_> = (0..self.a_num_limbs)
-            .map(|i| vars.local_wires[self.wire_a(i)])
-            .collect();
-
-        let b_limbs: Vec<_> = (0..self.b_num_limbs)
-            .map(|i| vars.local_wires[self.wire_b(i)])
-            .collect();
-
-        // TODO: Do limbs have to be range checked < 2^32?
-
-        // Constraints for the product and carry of each limb of a and b.
-        for i in 0..self.a_num_limbs {
-            for j in 0..self.b_num_limbs {
-                let (product_wire, carry_wire) = self.wire_to_add_product_carry(i, j);
-                let product = vars.local_wires[product_wire];
-                let carry = vars.local_wires[carry_wire];
-
-                yield_constr.one(product + carry - a_limbs[i] * b_limbs[j]);
-            }
-        }
-
-        for c in 0..self.total_limbs() {
-            let (combined_limb_wire, combined_carry_wire) = self.wire_combined_limbs_with_carry(c);
-            let combined_limb = vars.local_wires[combined_limb_wire];
-            let combined_carry = vars.local_wires[combined_carry_wire];
-
-            let mut next_combined_carry = P::ZEROS;
-            if c < self.total_limbs() - 1 {
-                let (_, next_combined_carry_wire) = self.wire_combined_limbs_with_carry(c + 1);
-                next_combined_carry = vars.local_wires[next_combined_carry_wire];
-            }
-            let mut to_add_c = P::ZEROS;
-            for i in 0..self.a_num_limbs {
-                for j in 0..self.b_num_limbs {
-                    let (product_wire, carry_wire) = self.wire_to_add_product_carry(i, j);
-                    let product = vars.local_wires[product_wire];
-                    let carry = vars.local_wires[carry_wire];
-                    if i + j == c {
-                        to_add_c += product;
-                    }
-                    if i + j + 1 == c {
-                        to_add_c += carry;
-                    }
-                }
-            }
-            yield_constr.one(combined_limb + next_combined_carry - to_add_c - combined_carry);
-        }
+        todo!("eval_unfiltered_base_packed")
     }
 }
 
@@ -412,6 +306,8 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F>
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
+    use env_logger::{try_init_from_env, Env, DEFAULT_FILTER_ENV};
+    use plonky2::iop::witness::PartialWitness;
     use rand::rngs::OsRng;
     use rand::Rng;
 
@@ -421,7 +317,9 @@ mod tests {
     use plonky2::gates::gate_testing::{test_eval_fns, test_low_degree};
     use plonky2::hash::hash_types::HashOut;
     use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
+    use plonky2::plonk::prover::prove;
     use plonky2::util::log2_ceil;
+    use plonky2::util::timing::TimingTree;
 
     #[test]
     fn wire_indices() {
@@ -575,5 +473,9 @@ mod tests {
             gate.eval_unfiltered(vars).iter().all(|x| { x.is_zero() }),
             "Gate constraints are not satisfied."
         );
+    }
+
+    fn init_logger() {
+        let _ = try_init_from_env(Env::default().filter_or(DEFAULT_FILTER_ENV, "debug"));
     }
 }
