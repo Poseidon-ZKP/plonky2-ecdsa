@@ -516,7 +516,7 @@ mod tests {
     }
 
     #[test]
-    fn test_biguint_mul_custom() -> Result<()> {
+    fn test_100_biguint_mul_custom() -> Result<()> {
         init_logger();
         const D: usize = 2;
         type C = PoseidonGoldilocksConfig;
@@ -525,22 +525,24 @@ mod tests {
         let mut builder = CircuitBuilder::<F, D>::new(config);
         let mut pw = PartialWitness::new();
 
-        let x_value =
-            plonky2::field::secp256k1_scalar::Secp256K1Scalar::rand().to_canonical_biguint();
-        let y_value =
-            plonky2::field::secp256k1_scalar::Secp256K1Scalar::rand().to_canonical_biguint();
+        for _ in 0..140 {
+            let x_value =
+                plonky2::field::secp256k1_scalar::Secp256K1Scalar::rand().to_canonical_biguint();
+            let y_value =
+                plonky2::field::secp256k1_scalar::Secp256K1Scalar::rand().to_canonical_biguint();
 
-        // let x = builder.constant_biguint(&x_value);
-        // let y = builder.constant_biguint(&y_value);
-        let x = builder.add_virtual_biguint_target(x_value.to_u32_digits().len());
-        let y = builder.add_virtual_biguint_target(y_value.to_u32_digits().len());
-        // let _z = builder.mul_biguint(&x, &y);
-        //let expected_z = builder.add_virtual_biguint_target(expected_z_value.to_u32_digits().len());
-        //builder.connect_biguint(&z, &expected_z);
+            // let x = builder.constant_biguint(&x_value);
+            // let y = builder.constant_biguint(&y_value);
+            let x = builder.add_virtual_biguint_target(x_value.to_u32_digits().len());
+            let y = builder.add_virtual_biguint_target(y_value.to_u32_digits().len());
+            // let _z = builder.mul_biguint(&x, &y);
+            //let expected_z = builder.add_virtual_biguint_target(expected_z_value.to_u32_digits().len());
+            //builder.connect_biguint(&z, &expected_z);
 
-        pw.set_biguint_target(&x, &x_value);
-        pw.set_biguint_target(&y, &y_value);
-        builder.mul_biguint_custom(&x, &y);
+            pw.set_biguint_target(&x, &x_value);
+            pw.set_biguint_target(&y, &y_value);
+            builder.mul_biguint_custom(&x, &y);
+        }
 
         let num_gates = builder.num_gates();
         let mut timing = TimingTree::new("prove", Level::Debug);
@@ -571,8 +573,10 @@ mod tests {
         let mut pw = PartialWitness::new();
 
         for _ in 0..140 {
-            let x_value = BigUint::from_u128(rng.gen()).unwrap();
-            let y_value = BigUint::from_u128(rng.gen()).unwrap();
+            let x_value =
+                plonky2::field::secp256k1_scalar::Secp256K1Scalar::rand().to_canonical_biguint();
+            let y_value =
+                plonky2::field::secp256k1_scalar::Secp256K1Scalar::rand().to_canonical_biguint();
             let expected_z_value = &x_value * &y_value;
 
             let x = builder.add_virtual_biguint_target(x_value.to_u32_digits().len());
