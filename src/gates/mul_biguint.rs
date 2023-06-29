@@ -70,7 +70,7 @@ impl<F: RichField + Extendable<D>, const D: usize> MulBigUintGate<F, D> {
     // Wire indices for ith combined limb and carry
     pub fn wire_combined_limbs_with_carry(&self, i: usize) -> (usize, usize) {
         let first_empty_wire = self
-            .wire_to_add_product_carry(self.a_num_limbs, self.b_num_limbs)
+            .wire_to_add_product_carry(self.a_num_limbs - 1, self.b_num_limbs - 1)
             .1
             + 1;
         let combined_limb_wire = first_empty_wire + i * 2;
@@ -113,10 +113,10 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for MulBigUintGate
             let combined_limb = vars.local_wires[combined_limb_wire];
             let combined_carry = vars.local_wires[combined_carry_wire];
 
-            let next_combined_carry = F::Extension::ZERO;
+            let mut next_combined_carry = F::Extension::ZERO;
             if c < self.total_limbs() - 1 {
                 let (_, next_combined_carry_wire) = self.wire_combined_limbs_with_carry(c + 1);
-                let next_combined_carry = vars.local_wires[next_combined_carry_wire];
+                next_combined_carry = vars.local_wires[next_combined_carry_wire];
             }
             let mut to_add_c = F::Extension::ZERO;
             for i in 0..self.a_num_limbs {
@@ -147,7 +147,7 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for MulBigUintGate
     }
 
     fn eval_unfiltered_base_batch(&self, vars_base: EvaluationVarsBaseBatch<F>) -> Vec<F> {
-        todo!("implement eval_unfiltered_base_batch")
+        self.eval_unfiltered_base_batch_packed(vars_base)
     }
 
     fn eval_unfiltered_circuit(
@@ -180,6 +180,64 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for MulBigUintGate
 
     fn num_constraints(&self) -> usize {
         self.a_num_limbs * self.b_num_limbs + self.total_limbs()
+    }
+}
+
+impl<F: RichField + Extendable<D>, const D: usize> PackedEvaluableBase<F, D>
+    for MulBigUintGate<F, D>
+{
+    fn eval_unfiltered_base_packed<P: PackedField<Scalar = F>>(
+        &self,
+        vars: EvaluationVarsBasePacked<P>,
+        mut yield_constr: StridedConstraintConsumer<P>,
+    ) {
+        let a_limbs: Vec<_> = (0..self.a_num_limbs)
+            .map(|i| vars.local_wires[self.wire_a(i)])
+            .collect();
+
+        let b_limbs: Vec<_> = (0..self.b_num_limbs)
+            .map(|i| vars.local_wires[self.wire_b(i)])
+            .collect();
+
+        // TODO: Do limbs have to be range checked < 2^32?
+
+        // Constraints for the product and carry of each limb of a and b.
+        for i in 0..self.a_num_limbs {
+            for j in 0..self.b_num_limbs {
+                let (product_wire, carry_wire) = self.wire_to_add_product_carry(i, j);
+                let product = vars.local_wires[product_wire];
+                let carry = vars.local_wires[carry_wire];
+
+                yield_constr.one(product + carry - a_limbs[i] * b_limbs[j]);
+            }
+        }
+
+        for c in 0..self.total_limbs() {
+            let (combined_limb_wire, combined_carry_wire) = self.wire_combined_limbs_with_carry(c);
+            let combined_limb = vars.local_wires[combined_limb_wire];
+            let combined_carry = vars.local_wires[combined_carry_wire];
+
+            let mut next_combined_carry = P::ZEROS;
+            if c < self.total_limbs() - 1 {
+                let (_, next_combined_carry_wire) = self.wire_combined_limbs_with_carry(c + 1);
+                next_combined_carry = vars.local_wires[next_combined_carry_wire];
+            }
+            let mut to_add_c = P::ZEROS;
+            for i in 0..self.a_num_limbs {
+                for j in 0..self.b_num_limbs {
+                    let (product_wire, carry_wire) = self.wire_to_add_product_carry(i, j);
+                    let product = vars.local_wires[product_wire];
+                    let carry = vars.local_wires[carry_wire];
+                    if i + j == c {
+                        to_add_c += product;
+                    }
+                    if i + j + 1 == c {
+                        to_add_c += carry;
+                    }
+                }
+            }
+            yield_constr.one(combined_limb + next_combined_carry - to_add_c - combined_carry);
+        }
     }
 }
 
@@ -272,4 +330,126 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F>
             }
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use rand::rngs::OsRng;
+    use rand::Rng;
+
+    use super::*;
+    use plonky2::field::goldilocks_field::GoldilocksField;
+    use plonky2::field::types::Sample;
+    use plonky2::gates::gate_testing::{test_eval_fns, test_low_degree};
+    use plonky2::hash::hash_types::HashOut;
+    use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
+    use plonky2::util::log2_ceil;
+
+    const MAX_POWER_BITS: usize = 17;
+
+    #[test]
+    fn wire_indices() {
+        let gate = MulBigUintGate::<GoldilocksField, 4> {
+            a_num_limbs: 4,
+            b_num_limbs: 4,
+            _phantom: PhantomData,
+        };
+
+        assert_eq!(gate.wire_a(0), 0);
+        assert_eq!(gate.wire_a(3), 3);
+        assert_eq!(gate.wire_b(0), 4);
+        assert_eq!(gate.wire_b(3), 7);
+        assert_eq!(gate.wire_to_add_product_carry(0, 0), (8, 9));
+        assert_eq!(gate.wire_to_add_product_carry(3, 3), (38, 39));
+        assert_eq!(gate.wire_combined_limbs_with_carry(0), (40, 41));
+        assert_eq!(gate.wire_combined_limbs_with_carry(7), (54, 55));
+    }
+
+    #[test]
+    fn low_degree() {
+        let gate = MulBigUintGate::<GoldilocksField, 4> {
+            a_num_limbs: 4,
+            b_num_limbs: 4,
+            _phantom: PhantomData,
+        };
+        test_low_degree::<GoldilocksField, _, 4>(gate);
+    }
+
+    #[test]
+    fn eval_fns() -> Result<()> {
+        const D: usize = 2;
+        type C = PoseidonGoldilocksConfig;
+        type F = <C as GenericConfig<D>>::F;
+        let gate = MulBigUintGate::<GoldilocksField, 2> {
+            a_num_limbs: 4,
+            b_num_limbs: 4,
+            _phantom: PhantomData,
+        };
+        test_eval_fns::<F, C, _, D>(gate)
+    }
+
+    // #[test]
+    // fn test_gate_constraint() {
+    //     const D: usize = 2;
+    //     type C = PoseidonGoldilocksConfig;
+    //     type F = <C as GenericConfig<D>>::F;
+    //     type FF = <C as GenericConfig<D>>::FE;
+
+    //     /// Returns the local wires for an exponentiation gate given the base, power, and power bit
+    //     /// values.
+    //     fn get_wires(base: F, power: u64) -> Vec<FF> {
+    //         let mut power_bits = Vec::new();
+    //         let mut cur_power = power;
+    //         while cur_power > 0 {
+    //             power_bits.push(cur_power % 2);
+    //             cur_power /= 2;
+    //         }
+
+    //         let num_power_bits = power_bits.len();
+
+    //         let power_bits_f: Vec<_> = power_bits
+    //             .iter()
+    //             .map(|b| F::from_canonical_u64(*b))
+    //             .collect();
+
+    //         let mut v = vec![base];
+    //         v.extend(power_bits_f);
+
+    //         let mut intermediate_values = Vec::new();
+    //         let mut current_intermediate_value = F::ONE;
+    //         for i in 0..num_power_bits {
+    //             if power_bits[num_power_bits - i - 1] == 1 {
+    //                 current_intermediate_value *= base;
+    //             }
+    //             intermediate_values.push(current_intermediate_value);
+    //             current_intermediate_value *= current_intermediate_value;
+    //         }
+    //         let output_value = intermediate_values[num_power_bits - 1];
+    //         v.push(output_value);
+    //         v.extend(intermediate_values);
+
+    //         v.iter().map(|&x| x.into()).collect::<Vec<_>>()
+    //     }
+
+    //     let mut rng = OsRng;
+
+    //     let base = F::TWO;
+    //     let power = rng.gen::<usize>() % (1 << MAX_POWER_BITS);
+    //     let num_power_bits = log2_ceil(power + 1);
+    //     let gate = ExponentiationGate::<F, D> {
+    //         num_power_bits,
+    //         _phantom: PhantomData,
+    //     };
+
+    //     let vars = EvaluationVars {
+    //         local_constants: &[],
+    //         local_wires: &get_wires(base, power as u64),
+    //         public_inputs_hash: &HashOut::rand(),
+    //     };
+    //     assert!(
+    //         gate.eval_unfiltered(vars).iter().all(|x| x.is_zero()),
+    //         "Gate constraints are not satisfied."
+    //     );
+    // }
 }
