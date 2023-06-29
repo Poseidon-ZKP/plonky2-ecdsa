@@ -105,7 +105,11 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for MulBigUintGate
                 let product = vars.local_wires[product_wire];
                 let carry = vars.local_wires[carry_wire];
 
-                constraints.push(product + carry - a_limbs[i] * b_limbs[j]);
+                constraints.push(
+                    product * F::Extension::from_noncanonical_biguint(BigUint::from(2u64.pow(32)))
+                        + carry
+                        - a_limbs[i] * b_limbs[j],
+                );
             }
         }
 
@@ -133,7 +137,13 @@ impl<F: RichField + Extendable<D>, const D: usize> Gate<F, D> for MulBigUintGate
                     }
                 }
             }
-            constraints.push(combined_limb + next_combined_carry - to_add_c - combined_carry);
+            constraints.push(
+                combined_limb
+                    + next_combined_carry
+                        * F::Extension::from_noncanonical_biguint(BigUint::from(2u64.pow(32)))
+                    - to_add_c
+                    - combined_carry,
+            );
         }
 
         constraints
@@ -350,10 +360,14 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F>
                 let a_i = a_limbs[i].to_canonical_biguint();
                 let b_j = b_limbs[j].to_canonical_biguint();
                 let product_carry = (a_i * b_j).to_u32_digits();
-                let (product, carry) = (
-                    F::from_canonical_u32(product_carry[0]),
-                    F::from_canonical_u32(product_carry[1]),
-                );
+                let (product, carry) = if product_carry.len() == 1 {
+                    (F::from_canonical_u32(product_carry[0]), F::ZERO)
+                } else {
+                    (
+                        F::from_canonical_u32(product_carry[1]),
+                        F::from_canonical_u32(product_carry[0]),
+                    )
+                };
 
                 let (product_wire, carry_wire) = self.gate.wire_to_add_product_carry(i, j);
                 out_buffer.set_wire(local_wire(product_wire), product);
@@ -475,11 +489,16 @@ mod tests {
             for i in 0..a.len() {
                 for j in 0..b.len() {
                     let product_carry = (BigUint::from(a[i]) * BigUint::from(b[j])).to_u32_digits();
-                    to_add_vec[i].push((product_carry[0], product_carry[1]));
-                    let (product, carry) = (
-                        FF::from_canonical_u32(product_carry[0]),
-                        FF::from_canonical_u32(product_carry[1]),
-                    );
+                    let (product, carry) = if product_carry.len() == 1 {
+                        to_add_vec[i].push((product_carry[0], 0));
+                        (FF::from_canonical_u32(product_carry[0]), FF::ZERO)
+                    } else {
+                        to_add_vec[i].push((product_carry[1], product_carry[0]));
+                        (
+                            FF::from_canonical_u32(product_carry[1]),
+                            FF::from_canonical_u32(product_carry[0]),
+                        )
+                    };
                     wires.push(product);
                     wires.push(carry);
                 }
@@ -505,14 +524,12 @@ mod tests {
                 }
                 to_add_c += combined_carry_vec[c];
                 let to_add_c_u32_digits = to_add_c.to_u32_digits();
-                let (combined_limb, next_combined_carry) = (
-                    to_add_c_u32_digits[0],
-                    if to_add_c_u32_digits.len() > 1 {
-                        to_add_c_u32_digits[1]
-                    } else {
-                        0
-                    },
-                );
+                let (combined_limb, next_combined_carry) = if to_add_c_u32_digits.len() == 1 {
+                    (to_add_c_u32_digits[0], 0)
+                } else {
+                    (to_add_c_u32_digits[0], to_add_c_u32_digits[1])
+                };
+
                 combined_limb_vec.push(combined_limb);
                 if c < total_limbs - 1 {
                     combined_carry_vec.push(next_combined_carry);
@@ -553,11 +570,9 @@ mod tests {
             local_wires: &get_wires(a, b),
             public_inputs_hash: &HashOut::rand(),
         };
+
         assert!(
-            gate.eval_unfiltered(vars).iter().enumerate().all(|tuple| {
-                println!("{:?}", tuple);
-                tuple.0.is_zero()
-            }),
+            gate.eval_unfiltered(vars).iter().all(|x| { x.is_zero() }),
             "Gate constraints are not satisfied."
         );
     }
