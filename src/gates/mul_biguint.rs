@@ -206,7 +206,63 @@ impl<F: RichField + Extendable<D>, const D: usize> PackedEvaluableBase<F, D>
         vars: EvaluationVarsBasePacked<P>,
         mut yield_constr: StridedConstraintConsumer<P>,
     ) {
-        todo!("eval_unfiltered_base_packed")
+        let a_limbs: Vec<_> = (0..self.a_num_limbs)
+            .map(|i| vars.local_wires[self.wire_a(i)])
+            .collect();
+
+        let b_limbs: Vec<_> = (0..self.b_num_limbs)
+            .map(|i| vars.local_wires[self.wire_b(i)])
+            .collect();
+
+        // TODO: Do limbs have to be range checked < 2^32?
+
+        // Constraints for the product and carry of each limb of a and b.
+        for i in 0..self.a_num_limbs {
+            for j in 0..self.b_num_limbs {
+                let (product_wire, carry_wire) = self.wire_to_add_product_carry(i, j);
+                let product = vars.local_wires[product_wire];
+                let carry = vars.local_wires[carry_wire];
+
+                yield_constr.one(
+                    product * P::from(F::from_noncanonical_biguint(BigUint::from(2u64.pow(32))))
+                        + carry
+                        - a_limbs[i] * b_limbs[j],
+                );
+            }
+        }
+
+        for c in 0..self.total_limbs() {
+            let (combined_limb_wire, combined_carry_wire) = self.wire_combined_limbs_with_carry(c);
+            let combined_limb = vars.local_wires[combined_limb_wire];
+            let combined_carry = vars.local_wires[combined_carry_wire];
+
+            let mut next_combined_carry = P::ZEROS;
+            if c < self.total_limbs() - 1 {
+                let (_, next_combined_carry_wire) = self.wire_combined_limbs_with_carry(c + 1);
+                next_combined_carry = vars.local_wires[next_combined_carry_wire];
+            }
+            let mut to_add_c = P::ZEROS;
+            for i in 0..self.a_num_limbs {
+                for j in 0..self.b_num_limbs {
+                    let (product_wire, carry_wire) = self.wire_to_add_product_carry(i, j);
+                    let product = vars.local_wires[product_wire];
+                    let carry = vars.local_wires[carry_wire];
+                    if i + j == c {
+                        to_add_c += product;
+                    }
+                    if i + j + 1 == c {
+                        to_add_c += carry;
+                    }
+                }
+            }
+            yield_constr.one(
+                combined_limb
+                    + next_combined_carry
+                        * P::from(F::from_noncanonical_biguint(BigUint::from(2u64.pow(32))))
+                    - to_add_c
+                    - combined_carry,
+            );
+        }
     }
 }
 
@@ -250,15 +306,17 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F>
             .map(|i| get_local_wire(self.gate.wire_b(i)))
             .collect();
 
+        let mut to_add_vec = vec![Vec::with_capacity(self.gate.b_num_limbs); self.gate.a_num_limbs];
         for i in 0..self.gate.a_num_limbs {
             for j in 0..self.gate.b_num_limbs {
-                // TODO: Multiply limbs and get product and carry.
                 let a_i = a_limbs[i].to_canonical_biguint();
                 let b_j = b_limbs[j].to_canonical_biguint();
                 let product_carry = (a_i * b_j).to_u32_digits();
                 let (product, carry) = if product_carry.len() == 1 {
+                    to_add_vec[i].push((product_carry[0], 0));
                     (F::from_canonical_u32(product_carry[0]), F::ZERO)
                 } else {
+                    to_add_vec[i].push((product_carry[1], product_carry[0]));
                     (
                         F::from_canonical_u32(product_carry[1]),
                         F::from_canonical_u32(product_carry[0]),
@@ -271,6 +329,7 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F>
             }
         }
 
+        let mut curr_combined_carry = BigUint::zero();
         for c in 0..self.gate.total_limbs() {
             let (combined_limb_wire, combined_carry_wire) =
                 self.gate.wire_combined_limbs_with_carry(c);
@@ -283,14 +342,15 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F>
                 for j in 0..self.gate.b_num_limbs {
                     let (product_wire, carry_wire) = self.gate.wire_to_add_product_carry(i, j);
                     if i + j == c {
-                        to_add_c += get_local_wire(product_wire).to_canonical_biguint();
+                        to_add_c += to_add_vec[i][j].0;
                     }
                     if i + j + 1 == c {
-                        to_add_c += get_local_wire(carry_wire).to_canonical_biguint();
+                        to_add_c += to_add_vec[i][j].1;
                     }
                 }
             }
-            to_add_c += get_local_wire(combined_carry_wire).to_canonical_biguint();
+
+            to_add_c += curr_combined_carry.clone();
             let to_add_c_u32_digits = to_add_c.to_u32_digits();
             let (combined_limb, next_combined_carry) = if to_add_c_u32_digits.len() == 1 {
                 (F::from_canonical_u32(to_add_c_u32_digits[0]), F::ZERO)
@@ -305,6 +365,7 @@ impl<F: RichField + Extendable<D>, const D: usize> SimpleGenerator<F>
             if c < self.gate.total_limbs() - 1 {
                 let (_, next_combined_carry_wire) = self.gate.wire_combined_limbs_with_carry(c + 1);
                 out_buffer.set_wire(local_wire(next_combined_carry_wire), next_combined_carry);
+                curr_combined_carry = F::to_canonical_biguint(&next_combined_carry);
             }
         }
     }
