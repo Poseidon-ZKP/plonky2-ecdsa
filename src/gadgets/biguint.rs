@@ -530,8 +530,16 @@ mod tests {
         let y_value =
             plonky2::field::secp256k1_scalar::Secp256K1Scalar::rand().to_canonical_biguint();
 
-        let x = builder.constant_biguint(&x_value);
-        let y = builder.constant_biguint(&y_value);
+        // let x = builder.constant_biguint(&x_value);
+        // let y = builder.constant_biguint(&y_value);
+        let x = builder.add_virtual_biguint_target(x_value.to_u32_digits().len());
+        let y = builder.add_virtual_biguint_target(y_value.to_u32_digits().len());
+        // let _z = builder.mul_biguint(&x, &y);
+        //let expected_z = builder.add_virtual_biguint_target(expected_z_value.to_u32_digits().len());
+        //builder.connect_biguint(&z, &expected_z);
+
+        pw.set_biguint_target(&x, &x_value);
+        pw.set_biguint_target(&y, &y_value);
         builder.mul_biguint_custom(&x, &y);
 
         let num_gates = builder.num_gates();
