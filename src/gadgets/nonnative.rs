@@ -328,8 +328,12 @@ impl<F: RichField + Extendable<D>, const D: usize> CircuitBuilderNonNative<F, D>
         range_check_u32_circuit(self, prod.value.limbs.clone());
         range_check_u32_circuit(self, overflow.limbs.clone());
 
-        let prod_expected = self.mul_biguint(&a.value, &b.value);
+        // a * b = prod + quotient * modulus
+        // prod = a * b - quotient * modulus
+        // quotient = floor(a * b / modulus)
+        // modulus = bn254 base field size
 
+        let prod_expected = self.mul_biguint(&a.value, &b.value);
         let mod_times_overflow = self.mul_biguint(&modulus, &overflow);
         let prod_actual = self.add_biguint(&prod.value, &mod_times_overflow);
         self.connect_biguint(&prod_expected, &prod_actual);
@@ -652,6 +656,14 @@ mod tests {
     use plonky2::plonk::config::{GenericConfig, PoseidonGoldilocksConfig};
 
     use crate::gadgets::nonnative::CircuitBuilderNonNative;
+    use env_logger::{try_init_from_env, Env, DEFAULT_FILTER_ENV};
+    use log::Level;
+    use plonky2::plonk::prover::prove;
+    use plonky2::util::timing::TimingTree;
+
+    fn init_logger() {
+        let _ = try_init_from_env(Env::default().filter_or(DEFAULT_FILTER_ENV, "debug"));
+    }
 
     #[test]
     fn test_nonnative_add() -> Result<()> {
@@ -752,6 +764,7 @@ mod tests {
 
     #[test]
     fn test_nonnative_mul() -> Result<()> {
+        init_logger();
         type FF = Secp256K1Base;
         const D: usize = 2;
         type C = PoseidonGoldilocksConfig;
@@ -771,9 +784,20 @@ mod tests {
         let product_expected = builder.constant_nonnative(product_ff);
         builder.connect_nonnative(&product, &product_expected);
 
+        let num_gates = builder.num_gates();
+        let mut timing = TimingTree::new("prove", Level::Debug);
         let data = builder.build::<C>();
-        let proof = data.prove(pw).unwrap();
-        data.verify(proof)
+        let proof = prove::<F, C, D>(&data.prover_only, &data.common, pw, &mut timing)?;
+        timing.print();
+        println!(
+            "NONNATIVE MUL: num_gates: {}, degree: {}, ",
+            num_gates,
+            data.common.degree()
+        );
+
+        data.verify(proof)?;
+
+        Ok(())
     }
 
     #[test]
